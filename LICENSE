@@ -1,0 +1,46 @@
+                    GNU AFFERO GENERAL PUBLIC LICENSE
+                       Version 3, 19 November 2007
+
+ Copyright (C) 2007 Free Software Foundation, Inc. <https://fsf.org/>
+ Everyone is permitted to copy and distribute verbatim copies
+ of this license document, but changing it is not allowed.
+
+Trove AI — AI-powered personal knowledge base.
+Copyright (C) 2026 Trove AI contributors
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+The full text of the AGPL-3.0 license is available at:
+  https://www.gnu.org/licenses/agpl-3.0.txt
+
+----------------------------------------------------------------------
+
+KEY POINTS (informational summary, not legal advice):
+
+1. You can use, modify, and self-host Trove AI for any purpose, including
+   commercial use.
+
+2. If you modify Trove AI and:
+   (a) distribute the modified binary/source, OR
+   (b) operate it as a network service (e.g. SaaS) that users interact with,
+   then you MUST provide the complete corresponding source code of your
+   modified version to those users.
+
+3. This includes any forks deployed on the public internet.
+
+4. Choosing AGPL means: open contributions stay open. A company forking
+   Trove AI to run as a closed-source SaaS would violate the license.
+
+If you need different terms (e.g. proprietary closed-source SaaS deployment),
+contact the maintainer for a commercial license.

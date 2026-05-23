@@ -1,0 +1,94 @@
+version: '3.8'
+
+# Trove AI — local/self-host stack.
+# Copy .env.example to .env first and fill in POSTGRES_PASSWORD + SECRET_KEY.
+# Quick start: docker compose up -d
+# Browse: http://localhost  (or replace 'localhost' in NEXT_PUBLIC_* with your host)
+
+services:
+  nginx:
+    image: nginx:alpine
+    container_name: trove-nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - backend
+      - frontend
+    restart: unless-stopped
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: trove-db
+    environment:
+      POSTGRES_DB: trove
+      POSTGRES_USER: trove
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./backend/app/migrations:/docker-entrypoint-initdb.d:ro
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: trove-redis
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: trove-backend
+    image: trove-backend:latest
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
+    environment:
+      DATABASE_URL: postgresql+asyncpg://trove:${POSTGRES_PASSWORD}@postgres:5432/trove
+      DATABASE_URL_SYNC: postgresql://trove:${POSTGRES_PASSWORD}@postgres:5432/trove
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in .env}
+      # Optional API keys — recommended to configure via web UI (Settings) instead
+      MINIMAX_API_KEY: ${MINIMAX_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      SILICONFLOW_API_KEY: ${SILICONFLOW_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      # Used by wechat-bot integration if enabled
+      SERVICE_TOKENS: ${SERVICE_TOKENS:-}
+      TROVE_ENV: production
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      # Persist user-configured LLM/embedding settings across container restarts
+      - ./backend/app/config_store.json:/app/app/config_store.json
+    restart: unless-stopped
+
+  # OPTIONAL: WeChat bot worker — uncomment if you have wechat bot credentials set up.
+  # Requires SERVICE_TOKEN_WECHAT_BOT in .env and wechat_accounts seeded via the API.
+  # wechat-bot:
+  #   image: trove-backend:latest
+  #   container_name: trove-wechat-bot
+  #   command: python -m app.wechat_bot
+  #   environment:
+  #     DATABASE_URL: postgresql+asyncpg://trove:${POSTGRES_PASSWORD}@postgres:5432/trove
+  #     TROVE_BASE: http://backend:8000
+  #     TROVE_TOKEN: ${SERVICE_TOKEN_WECHAT_BOT:-}
+  #   depends_on:
+  #     - backend
+  #     - postgres
+  #   restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: trove-frontend
+    environment:
+      NEXT_PUBLIC_API_URL: /api
+      TROVE_ENV: production
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  pgdata:

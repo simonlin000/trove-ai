@@ -1,0 +1,33 @@
+# Secrets — never commit
+.env
+backend/app/config_store.json
+*.pem
+
+# Build artifacts
+frontend/.next/
+frontend/out/
+frontend/node_modules/
+backend/app/**/__pycache__/
+backend/**/*.pyc
+
+# OS
+.DS_Store
+._*
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# Logs
+*.log
+logs/
+
+# Project local artifacts
+_archive/
+项目记忆.md
+
+# Built plugin artifacts (re-built from source)
+backend/app/static/obsidian-plugin/main.js
+backend/app/static/obsidian-plugin/manifest.json
+backend/app/static/obsidian-plugin/styles.css

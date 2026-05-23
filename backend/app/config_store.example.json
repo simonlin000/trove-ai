@@ -1,0 +1,15 @@
+{
+  "_comment": "Copy this file to config_store.json and fill in your own keys. config_store.json is gitignored. Values here are merged with env vars + defaults at runtime. Configure through the web UI (设置 → AI 对话模型 / 嵌入模型) and this file gets written automatically.",
+  "llm": {
+    "provider": "openai",
+    "api_key": "",
+    "api_base": "https://api.openai.com/v1",
+    "model": "gpt-4o-mini"
+  },
+  "embedding": {
+    "provider": "openai",
+    "api_key": "",
+    "api_base": "https://api.openai.com/v1",
+    "model": "text-embedding-3-small"
+  }
+}
