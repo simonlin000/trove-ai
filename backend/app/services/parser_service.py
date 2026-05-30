@@ -325,6 +325,47 @@ class ParserService:
             return og_img.get('content', '')
         return ""
 
+    # CDNs that block hotlink requests without a proper Referer. URLs from these
+    # hosts must be rewritten through /api/images/proxy (served with the right Referer).
+    _HOTLINK_PROTECTED_CDNS = (
+        'mmbiz.qpic.cn', 'mmbiz.qlogo.cn', 'mmecoa.qpic.cn',  # WeChat / 视频号
+        'xhscdn.com',                                           # XHS
+        'douyinpic.com', 'douyinvod.com',                       # Douyin
+    )
+
+    @classmethod
+    def _proxy_url(cls, image_url: Optional[str]) -> Optional[str]:
+        """Rewrite hotlink-protected image URLs through the backend proxy.
+
+        The proxy endpoint (/api/images/proxy) adds the right Referer per CDN.
+        Non-protected URLs are returned unchanged. None / empty pass through.
+        """
+        if not image_url:
+            return image_url
+        if image_url.startswith('/api/images/proxy'):
+            return image_url  # already rewritten
+        if any(d in image_url for d in cls._HOTLINK_PROTECTED_CDNS):
+            from urllib.parse import quote
+            return f"/api/images/proxy?url={quote(image_url, safe='')}"
+        return image_url
+
+    @classmethod
+    def _proxy_imgs_in_html(cls, html: str) -> str:
+        """Rewrite any <img src=...> referencing a hotlink-protected CDN through proxy."""
+        if not html:
+            return html
+        soup = BeautifulSoup(html, 'lxml')
+        for img in soup.find_all('img'):
+            src = img.get('src') or ''
+            new_src = cls._proxy_url(src)
+            if new_src != src:
+                img['src'] = new_src
+        # BeautifulSoup with lxml wraps content in <html><body>; strip if added.
+        body = soup.body
+        if body:
+            return body.decode_contents()
+        return str(soup)
+
     async def _fetch_bilibili(self, url: str) -> Dict:
         """Bilibili: route by URL shape.
         - 专栏 (read/cv...) and opus (新版图文动态/笔记): HTML scrape

@@ -15,6 +15,7 @@ All notable changes to Trove AI are documented here.
 
 ### Fixed
 - **Generic web capture was broken** — the generic fetch path called content-extraction helpers (`_extract_content`, `_extract_title`, `_extract_author`, `_extract_cover`) that were missing, so capturing any site without a dedicated parser would error. These helpers are restored and the path now works end to end.
+- **Xiaohongshu image proxying was broken** — the XHS parser called image-proxy helpers (`_proxy_url`, `_proxy_imgs_in_html`) that were missing, so XHS capture would error before saving. These helpers (and the hotlink-protected CDN list) are restored.
 
 ### Dependencies
 - Added `trafilatura>=2.0.0,<3` and `lxml_html_clean>=0.4.0` (the latter is required because `lxml.html.clean` was split into a standalone package as of lxml 5.2).
