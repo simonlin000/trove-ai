@@ -344,7 +344,12 @@ The plugin auto-detects already-synced articles via dual-OR (sync_state.json ∪
 
 ## Roadmap
 
-### v1.0 — current
+### v1.1 — current
+- ✅ WeChat Channels (视频号) capture
+- ✅ Smart generic extraction (trafilatura → headless render → BeautifulSoup)
+- ✅ Article-scoped Q&A (📄 this-article / 📚 whole-library toggle)
+
+### v1.0
 - ✅ Multi-platform capture (8+ sources)
 - ✅ AI processing pipeline (summary / key-points / tags / embedding / mind-map)
 - ✅ RAG Q&A + semantic search

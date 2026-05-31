@@ -1,8 +1,8 @@
 # Changelog
 
-All notable changes to Trove AI are documented here.
+All notable changes to Trove AI are documented here. This project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.1.0] — 2026-05-31
 
 ### Added
 - **🎬 WeChat Channels (视频号) capture** — links from `channels.weixin.qq.com` are now fetched and saved. WeChat Channels pages are JavaScript-rendered, so they are handled by the new generic extraction cascade (below), which renders the page with a headless browser before extracting the main content.
@@ -19,3 +19,16 @@ All notable changes to Trove AI are documented here.
 
 ### Dependencies
 - Added `trafilatura>=2.0.0,<3` and `lxml_html_clean>=0.4.0` (the latter is required because `lxml.html.clean` was split into a standalone package as of lxml 5.2).
+
+## [1.0.0] — 2026-05-23
+
+Initial open-source release of Trove AI (拾遗 AI) — a self-hostable, AI-powered second brain for turning saved links into structured, searchable knowledge.
+
+### Added
+- Multi-platform article capture with platform-specific parsers (WeChat 公众号, Bilibili, Toutiao, Douyin, Xiaohongshu) plus a generic-web fallback.
+- AI processing pipeline: title / summary / key-points / tags / embedding / mind-map.
+- RAG Q&A with citations + pgvector semantic search.
+- Automatic knowledge graph and learning-path generation.
+- WeChat Bot ingress.
+- One-way Obsidian sync with revocable sync tokens; multi-tenant support.
+- Docker-based self-hosting; responsive UI for PC / pad / mobile.
