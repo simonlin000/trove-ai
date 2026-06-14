@@ -20,7 +20,7 @@ router = APIRouter(prefix="/assistant", tags=["assistant"])
 
 class AskRequest(BaseModel):
     question: str
-    top_k: int = 5
+    top_k: int = 8
     article_id: Optional[str] = None  # 锁定单篇:仅基于该文章整篇正文回答,不做全库检索
 
 
@@ -142,10 +142,10 @@ async def ask(req: AskRequest, session: AsyncSession = Depends(get_db), current_
     # Step 2: Semantic search — find top_k most relevant articles (scoped to user)
     search_sql = text(f"""
         SELECT id, title, clean_content, raw_content,
-               (embedding <-> '{emb_str}'::vector) AS distance
+               (embedding <=> '{emb_str}'::vector) AS distance
         FROM articles
         WHERE embedding IS NOT NULL AND user_id = :user_id
-        ORDER BY embedding <-> '{emb_str}'::vector
+        ORDER BY embedding <=> '{emb_str}'::vector
         LIMIT :top_k
     """)
     result = await session.execute(search_sql, {"top_k": req.top_k, "user_id": current_user.id})
@@ -170,12 +170,13 @@ async def ask(req: AskRequest, session: AsyncSession = Depends(get_db), current_
         if not paragraphs:
             paragraphs = [p.strip() for p in content.split("\n") if p.strip()]
 
-        # Take first 2000 chars as context chunk
-        chunk = "\n".join(paragraphs[:min(len(paragraphs), 10)])
-        if len(chunk) > 2000:
-            chunk = chunk[:2000] + "..."
+        # Take a generous context chunk (answers often live mid/late in the article)
+        chunk = "\n".join(paragraphs[:min(len(paragraphs), 15)])
+        if len(chunk) > 3000:
+            chunk = chunk[:3000] + "..."
 
-        relevance = max(0.0, 1.0 - float(distance) / 10.0)
+        # cosine distance (<=>) ∈ [0,2]; cosine similarity = 1 - distance
+        relevance = max(0.0, 1.0 - float(distance))
         
         citations.append(Citation(
             article_id=str(article_id),

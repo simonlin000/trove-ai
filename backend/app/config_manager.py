@@ -117,8 +117,8 @@ CONFIG_SCHEMA: Dict[str, dict] = {
                 "key": "model",
                 "label": "模型名称",
                 "type": "text",
-                "default": "BAAI/bge-small-en-v1.5",
-                "placeholder": "BAAI/bge-small-en-v1.5",
+                "default": "BAAI/bge-small-zh-v1.5",
+                "placeholder": "BAAI/bge-small-zh-v1.5",
                 "required": True,
             },
         ],
@@ -411,7 +411,7 @@ async def test_embedding_connection(config: Optional[Dict[str, Any]] = None) -> 
             import time
             t0 = time.time()
             from fastembed import TextEmbedding
-            model_name = config.get("model", "BAAI/bge-small-en-v1.5")
+            model_name = config.get("model", "BAAI/bge-small-zh-v1.5")
             model = TextEmbedding(model_name=model_name)
             embeddings = list(model.embed(["test"]))
             latency = round((time.time() - t0) * 1000)

@@ -38,7 +38,7 @@ class Article(Base):
     raw_content = Column(Text)  # original HTML
     clean_content = Column(Text)  # cleaned markdown
     plain_text = Column(Text)  # plain text for search
-    embedding = Column(Vector(384))  # fastembed BAAI/bge-small-en-v1.5 (384-dim) for semantic search
+    embedding = Column(Vector(512))  # fastembed BAAI/bge-small-zh-v1.5 (512-dim) for semantic search
     
     mindmap_data = Column(JSONB)  # Cached mind map structure {name, children: [...]}
     

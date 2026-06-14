@@ -340,7 +340,7 @@ class ApiClient {
   }
 
   // AI Assistant
-  async askAssistant(question: string, topK: number = 5): Promise<AskResponse> {
+  async askAssistant(question: string, topK: number = 8): Promise<AskResponse> {
     return this.request<AskResponse>('/api/assistant/ask', {
       method: 'POST',
       body: JSON.stringify({ question, top_k: topK }),

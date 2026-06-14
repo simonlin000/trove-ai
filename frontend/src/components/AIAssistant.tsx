@@ -196,7 +196,7 @@ export default function AIAssistant() {
       },
       body: JSON.stringify({
         question: q,
-        top_k: 5,
+        top_k: 8,
         ...(articleId ? { article_id: articleId } : {}),
       }),
     });

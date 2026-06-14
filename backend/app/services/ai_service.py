@@ -15,16 +15,38 @@ settings = get_settings()
 logger = logging.getLogger(__name__)
 
 # Local deterministic embedding model (fastembed: ONNX runtime, no torch needed)
-# BAAI/bge-small-en-v1.5: 384-dimensional, small (~130MB), fast, MIT license
+# BAAI/bge-small-zh-v1.5: 512-dimensional Chinese model (~95MB), fast, MIT license.
+# Chinese knowledge base — must use a Chinese/multilingual model or semantic search is garbage.
+LOCAL_EMBEDDING_MODEL_NAME = "BAAI/bge-small-zh-v1.5"
 EMBEDDING_MODEL = None
+EMBEDDING_MODEL_NAME_LOADED = None
+
+
+def _get_local_model_name() -> str:
+    """Resolve the local fastembed model name from config, defaulting to the zh model."""
+    try:
+        from app.config_manager import get_embedding_config
+        cfg = get_embedding_config()
+        if cfg.get("provider", "local") == "local":
+            name = (cfg.get("model") or "").strip()
+            if name:
+                return name
+    except Exception:
+        pass
+    return LOCAL_EMBEDDING_MODEL_NAME
 
 
 def _get_embedding_model():
-    global EMBEDDING_MODEL
+    global EMBEDDING_MODEL, EMBEDDING_MODEL_NAME_LOADED
+    model_name = _get_local_model_name()
+    # Reload if the configured local model changed.
+    if EMBEDDING_MODEL not in (None, False) and EMBEDDING_MODEL_NAME_LOADED != model_name:
+        EMBEDDING_MODEL = None
     if EMBEDDING_MODEL is None:
         try:
-            logger.info("Loading embedding model BAAI/bge-small-en-v1.5 via fastembed...")
-            EMBEDDING_MODEL = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
+            logger.info(f"Loading embedding model {model_name} via fastembed...")
+            EMBEDDING_MODEL = TextEmbedding(model_name=model_name)
+            EMBEDDING_MODEL_NAME_LOADED = model_name
             logger.info("Embedding model loaded.")
         except Exception as e:
             logger.warning(f"Local embedding model load failed: {e}")
@@ -470,7 +492,7 @@ class LLMService:
         provider = emb_cfg.get("provider", "local")
         api_key = emb_cfg.get("api_key", "")
         api_base = emb_cfg.get("api_base", "")
-        model = emb_cfg.get("model", "BAAI/bge-m3")
+        model = emb_cfg.get("model", "BAAI/bge-small-zh-v1.5")
         
         # Use API if provider is not local and we have a key
         if provider != "local" and api_key and api_base:

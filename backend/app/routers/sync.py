@@ -1,10 +1,12 @@
 """Sync API — endpoints used by local Obsidian-sync agent.
 
-Two endpoints:
-- POST /api/sync/issue-token  (JWT auth) — mint a long-lived (1y) JWT bound to
-  current user, for the local sync agent to use.
-- GET  /api/sync/articles     (JWT auth) — paginated list of THIS USER'S AI-
-  processed articles. Local agent writes each to ~/Obsidian/<vault>/Trove AI/.
+Endpoints:
+- POST /api/sync/issue-token    (JWT auth) — mint a long-lived (1y) JWT
+- POST /api/sync/revoke-all-tokens (JWT auth) — invalidate all sync tokens
+- GET  /api/sync/articles       (JWT auth) — Trove → Obsidian: pull articles
+- POST /api/sync/articles       (JWT auth) — Obsidian → Trove: push articles
+- GET  /api/sync/stats          (JWT auth) — sync statistics
+- GET  /api/sync/plugin-download (public) — download the Obsidian plugin
 
 Design: docs/obsidian-sync-design.md
 """
@@ -315,3 +317,107 @@ async def sync_stats(
         total_articles=total or 0,
         eligible_articles=eligible or 0,
     )
+
+
+# ============================================================
+#  Obsidian → Trove: push articles from local vault
+# ============================================================
+
+class PushArticleRequest(BaseModel):
+    obsidian_path: str = Field(..., description="Vault-relative path, e.g. 'Trove AI/some-article.md'")
+    title: str
+    content: str = Field(..., description="Full markdown body")
+    tags: List[str] = Field(default_factory=list)
+    folder: Optional[str] = Field(None, description="Folder name in Trove")
+    source_url: Optional[str] = None
+
+
+class PushArticleResponse(BaseModel):
+    id: str
+    title: str
+    action: str  # "created" or "updated"
+    message: str
+
+
+@router.post("/articles", response_model=PushArticleResponse)
+async def push_article(
+    body: PushArticleRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Push an article from Obsidian into Trove.
+
+    Matches by obsidian_path — if an article with the same path exists
+    for this user, it's updated in-place. Otherwise a new article is created.
+    """
+    from app.models.article import Folder
+
+    # Find or create folder
+    folder_id = None
+    if body.folder:
+        folder_stmt = select(Folder).where(
+            Folder.name == body.folder,
+            Folder.user_id == current_user.id,
+        )
+        folder_result = await db.execute(folder_stmt)
+        folder = folder_result.scalar_one_or_none()
+        if not folder:
+            folder = Folder(name=body.folder, user_id=current_user.id)
+            db.add(folder)
+            await db.flush()
+        folder_id = folder.id
+
+    # Look for existing article by obsidian_path
+    existing_stmt = select(Article).where(
+        Article.user_id == current_user.id,
+        Article.url == f"obsidian://{body.obsidian_path}",
+    )
+    result = await db.execute(existing_stmt)
+    existing = result.scalar_one_or_none()
+
+    if existing:
+        # Update existing
+        existing.title = body.title
+        existing.raw_content = body.content
+        existing.clean_content = body.content
+        existing.plain_text = body.content
+        existing.word_count = len(body.content)
+        existing.source_platform = "obsidian"
+        existing.content_type = "note"
+        existing.folder_id = folder_id or existing.folder_id
+        action = "updated"
+        article_id = existing.id
+        await db.commit()
+        return PushArticleResponse(
+            id=str(article_id),
+            title=body.title,
+            action=action,
+            message=f"已更新: {body.title}",
+        )
+    else:
+        # Create new article
+        article = Article(
+            user_id=current_user.id,
+            title=body.title,
+            url=f"obsidian://{body.obsidian_path}",
+            raw_content=body.content,
+            clean_content=body.content,
+            plain_text=body.content,
+            word_count=len(body.content),
+            source_platform="obsidian",
+            content_type="note",
+            status="unread",
+            fetch_status="completed",
+            folder_id=folder_id,
+        )
+        db.add(article)
+        await db.commit()
+        await db.refresh(article)
+        action = "created"
+        article_id = article.id
+        return PushArticleResponse(
+            id=str(article_id),
+            title=body.title,
+            action=action,
+            message=f"已创建: {body.title}",
+        )

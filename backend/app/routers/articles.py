@@ -26,7 +26,7 @@ from app.services.spark_service import generate_article
 router = APIRouter(prefix="/api/articles", tags=["articles"])
 
 
-PROACTIVE_DISTANCE_THRESHOLD = 0.45  # bge-m3 cosine distance; lower = closer match
+PROACTIVE_DISTANCE_THRESHOLD = 0.45  # bge-small-zh cosine distance (<=>); lower = closer match
 PROACTIVE_PUBLIC_BASE = os.getenv("TROVE_PUBLIC_BASE", "http://localhost")
 
 
@@ -45,12 +45,12 @@ async def _maybe_push_proactive_relation(db, article_id):
 
     emb_str = "[" + ",".join(str(v) for v in article.embedding) + "]"
     sim_sql = sql_text(f"""
-        SELECT id, title, (embedding <-> '{emb_str}'::vector) AS distance
+        SELECT id, title, (embedding <=> '{emb_str}'::vector) AS distance
         FROM articles
         WHERE embedding IS NOT NULL
           AND user_id = :uid
           AND id != :aid
-        ORDER BY embedding <-> '{emb_str}'::vector
+        ORDER BY embedding <=> '{emb_str}'::vector
         LIMIT 1
     """)
     r = await db.execute(sim_sql, {"uid": article.user_id, "aid": article_id})
