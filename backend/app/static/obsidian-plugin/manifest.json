@@ -1,0 +1,10 @@
+{
+  "id": "trove-sync",
+  "name": "Trove AI Sync",
+  "version": "0.1.0",
+  "minAppVersion": "1.4.0",
+  "description": "Pull articles from your Trove AI knowledge base into this Obsidian vault as a one-shot snapshot. Local edits and server-side updates never overwrite each other.",
+  "author": "Trove AI",
+  "authorUrl": "",
+  "isDesktopOnly": false
+}
