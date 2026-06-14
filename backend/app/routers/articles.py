@@ -90,6 +90,33 @@ async def _maybe_push_proactive_relation(db, article_id):
     )
 
 
+async def _run_asr_and_update(article_id: UUID, audio_url: str):
+    """Background task: run ASR on audio URL and update article."""
+    import logging
+    logger = logging.getLogger("trove.asr")
+    from app.database import async_session
+    from app.services.transcription_service import transcription_service
+
+    async with async_session() as db:
+        try:
+            article = await db.get(Article, article_id)
+            if not article:
+                return
+            logger.info(f"ASR bg: starting for {article_id}")
+            asr_text = await transcription_service.transcribe_url(
+                audio_url, referer='https://www.bilibili.com'
+            )
+            if asr_text:
+                article.raw_content += f"\n\n## 视频字幕（ASR 转录）\n\n{asr_text}"
+                article.word_count = len(article.raw_content)
+                await db.commit()
+                logger.info(f"ASR bg: success, {len(asr_text)} chars")
+            else:
+                logger.warning(f"ASR bg: no text returned for {article_id}")
+        except Exception as e:
+            logger.exception(f"ASR bg: failed for {article_id}: {e}")
+
+
 async def process_article_background(article_id: UUID, raw_content: str, raw_html: str, url: str, db_session_factory):
     """Background task: AI process a newly added article."""
     import logging

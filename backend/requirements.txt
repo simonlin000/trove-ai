@@ -30,3 +30,5 @@ passlib[bcrypt]==1.7.4
 bcrypt==4.2.1
 json-repair>=0.30.0
 qrcode[pil]>=7.4.0
+faster-whisper>=1.0.0
+yt-dlp>=2024.0.0

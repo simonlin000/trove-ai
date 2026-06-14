@@ -2,7 +2,10 @@
 import re
 import json
 import httpx
+import asyncio
 import logging
+import tempfile
+from pathlib import Path
 from typing import Dict, Optional
 from urllib.parse import unquote
 from bs4 import BeautifulSoup
@@ -51,6 +54,8 @@ class ParserService:
         'iesdouyin.com': 'douyin',     # 抖音分享口令短链域
         'xiaohongshu.com': 'xhs',      # 小红书
         'xhslink.com': 'xhs',          # 小红书短链
+        'youtube.com': 'youtube',      # YouTube
+        'youtu.be': 'youtube',         # YouTube 短链
     }
     
     def detect_platform(self, url: str) -> str:
@@ -141,6 +146,10 @@ class ParserService:
         # parse __INITIAL_STATE__ inline JSON → Playwright/OG fallback
         if platform == 'xhs':
             return await self._fetch_xhs(url)
+
+        # P5: YouTube — yt-dlp subtitles first, ASR fallback
+        if platform == 'youtube':
+            return await self._fetch_youtube(url)
 
         # P5: 通用网页 — trafilatura 优先,内容过短再 Playwright 渲染,最后 BeautifulSoup 兜底
         # 视频号(channels.weixin.qq.com)、CSDN、掘金、Medium、少数派、36氪 等 JS 动态页同走此路
@@ -439,8 +448,8 @@ class ParserService:
             raise Exception(f"Cannot extract bvid from URL: {url}")
         bvid = m.group(1)
 
-        from bilibili_api import video as bv
-        v = bv.Video(bvid=bvid)
+        from bilibili_api import video as bv, Credential
+        v = bv.Video(bvid=bvid, credential=Credential(sessdata='_', bili_jct='_', buvid3='_'))
         info = await v.get_info()
 
         title = info.get('title', '')
@@ -448,6 +457,7 @@ class ParserService:
         cover = info.get('pic', '')
         owner = (info.get('owner') or {}).get('name', '')
         cid = info.get('cid')
+        duration = info.get('duration', 0)  # seconds
 
         # Subtitle (best effort — many videos have none)
         subtitle_text = ''
@@ -470,11 +480,32 @@ class ParserService:
         except Exception as e:
             logger.warning(f"bilibili subtitle fetch failed for {bvid}: {e}")
 
+        # ASR: if no subtitle, embed hidden marker for background transcription
+        asr_marker = ''
+        if not subtitle_text and cid:
+            try:
+                play_url = f'https://api.bilibili.com/x/player/playurl?bvid={bvid}&cid={cid}&qn=0&fnval=16'
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    r = await client.get(play_url, headers=self._get_headers('bilibili', url))
+                    dash = (r.json().get('data') or {}).get('dash', {})
+                    audio_streams = dash.get('audio', [])
+                    if audio_streams:
+                        audio_streams.sort(key=lambda a: a.get('bandwidth', 999999))
+                        asr_url = audio_streams[0].get('base_url', '')
+                        if asr_url and duration <= 1800:  # ≤30 minutes
+                            asr_marker = f'\n<!-- ASR_PENDING: {asr_url} -->'
+            except Exception as e:
+                logger.warning(f"bilibili ASR prep failed for {bvid}: {e}")
+
         raw_md = f"# {title}\n\n**UP 主：** {owner}\n\n## 简介\n\n{desc}"
         if subtitle_text:
             raw_md += f"\n\n## 视频字幕\n\n{subtitle_text}"
+        elif asr_marker:
+            raw_md += f"\n\n*（后台语音转录中，稍后自动更新…）*{asr_marker}"
+        elif duration > 1800:
+            raw_md += f"\n\n*（视频 {duration // 60} 分钟，超出自动转录上限，可手动下载音频转录。）*"
         else:
-            raw_md += "\n\n*（该视频未提供字幕）*"
+            raw_md += "\n\n*（该视频未提供字幕，ASR 转录亦不可用）*"
 
         return {
             'title': title or f'B 站视频 {bvid}',
@@ -1103,6 +1134,159 @@ class ParserService:
             'cover_image': cover_url_final,
             'og_meta': og_meta,
         }
+
+    async def _fetch_youtube(self, url: str) -> Dict:
+        """Fetch YouTube video: subtitles via yt-dlp, title/desc from -j."""
+        import json as _json
+        import subprocess
+
+        proxy = 'http://host.docker.internal:7897'  # YouTube requires proxy from Docker
+
+        # Get video metadata + subtitle list as JSON
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                'yt-dlp', '-j', '--no-playlist', '--skip-download',
+                '--no-warnings', '--proxy', proxy, url,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=90)
+        except asyncio.TimeoutError:
+            logger.warning(f"YouTube: yt-dlp -j timeout for {url}")
+            return self._youtube_fallback('YouTube Video', '', url)
+        except Exception as e:
+            logger.warning(f"YouTube: yt-dlp -j failed: {e}")
+            return self._youtube_fallback('YouTube Video', '', url)
+
+        if proc.returncode != 0 or not stdout:
+            logger.warning(f"YouTube: yt-dlp -j returned {proc.returncode}")
+            return self._youtube_fallback('YouTube Video', '', url)
+
+        try:
+            info = _json.loads(stdout)
+        except _json.JSONDecodeError:
+            return self._youtube_fallback('YouTube Video', '', url)
+
+        title = info.get('title', 'YouTube Video')
+        desc = (info.get('description') or '')[:2000]
+        uploader = info.get('uploader', '')
+        duration = info.get('duration', 0) or 0
+        thumbnail = info.get('thumbnail', '')
+
+        # Try to get Chinese subtitles first, then English, then auto
+        subtitle_text = ''
+        subs_to_try = [
+            (['zh-Hans', 'zh', 'zh-CN', 'zh-TW', 'zh-Hant'], True),
+            (['en'], True),
+        ]
+        for langs, auto in subs_to_try:
+            if subtitle_text:
+                break
+            for lang in langs:
+                try:
+                    sub_proc = await asyncio.create_subprocess_exec(
+                        'yt-dlp', '--skip-download', '--no-playlist',
+                        '--no-warnings',
+                        '--write-auto-subs' if auto else '--write-subs',
+                        f'--sub-lang={lang}', '--convert-subs=srt',
+                        '-o', '-', '--get-comments', url,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    # Instead, use --write-subs to file approach
+                    break
+                except Exception:
+                    continue
+
+        # Simpler: use --write-auto-subs + --sub-format srt + output to tempdir
+        if not subtitle_text:
+            try:
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    cmd = [
+                        'yt-dlp', '--skip-download', '--no-playlist', '--no-warnings',
+                        '--write-auto-subs', '--sub-lang', 'zh-Hans,en,zh',
+                        '--sub-format', 'srt/vtt/ass',
+                        '--proxy', proxy,
+                        '-o', f'{tmpdir}/%(title)s.%(ext)s', url
+                    ]
+                    proc = await asyncio.create_subprocess_exec(
+                        *cmd,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    await asyncio.wait_for(proc.communicate(), timeout=90)
+
+                    # Find subtitle files
+                    sub_files = list(Path(tmpdir).glob('*.srt')) + \
+                                list(Path(tmpdir).glob('*.vtt')) + \
+                                list(Path(tmpdir).glob('*.ass'))
+                    if sub_files:
+                        # Prefer Chinese
+                        zh_files = [f for f in sub_files if any(
+                            tag in f.name.lower() for tag in ['zh', 'zh-hans', 'zh-cn', 'chs']
+                        )]
+                        chosen = (zh_files or sub_files)[0]
+                        with open(chosen, 'r', encoding='utf-8', errors='ignore') as f:
+                            raw_sub = f.read()
+                        # Strip SRT timestamps/numbers — keep just text
+                        subtitle_text = self._clean_srt(raw_sub)
+                        logger.info(f"YouTube: subtitle from {chosen.name} ({len(subtitle_text)} chars)")
+            except Exception as e:
+                logger.warning(f"YouTube subtitle download failed: {e}")
+
+        raw_md = f"# {title}\n\n**频道：** {uploader}\n\n## 简介\n\n{desc}"
+        if subtitle_text:
+            raw_md += f"\n\n## 视频字幕\n\n{subtitle_text}"
+
+        # ASR fallback (same pattern as Bilibili)
+        asr_marker = ''
+        if not subtitle_text and duration <= 1800:
+            asr_marker = f'\n<!-- ASR_PENDING: {url} -->'  # URL-based: ASR task will use yt-dlp
+            raw_md += f"\n\n*（后台语音转录中，稍后自动更新…）*{asr_marker}"
+        elif not subtitle_text and duration > 1800:
+            raw_md += f"\n\n*（视频 {duration // 60} 分钟，超出自动转录上限。）*"
+
+        return {
+            'title': title,
+            'raw_html': '',
+            'raw_content': raw_md,
+            'platform': 'youtube',
+            'author': uploader,
+            'cover_image': thumbnail,
+        }
+
+    def _youtube_fallback(self, title: str, desc: str, url: str) -> Dict:
+        return {
+            'title': title,
+            'raw_html': '',
+            'raw_content': f"# {title}\n\n{desc}\n\n*（无法获取视频详情）*",
+            'platform': 'youtube',
+            'author': '',
+            'cover_image': '',
+        }
+
+    @staticmethod
+    def _clean_srt(srt_text: str) -> str:
+        """Strip SRT timestamps and numbers, return clean text."""
+        import re
+        # Remove sequence numbers and timestamps
+        cleaned = re.sub(r'^\d+\s*$', '', srt_text, flags=re.MULTILINE)
+        cleaned = re.sub(r'\d{2}:\d{2}:\d{2}[.,]\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}[.,]\d{3}', '', cleaned)
+        # Remove HTML tags from VTT
+        cleaned = re.sub(r'<[^>]+>', '', cleaned)
+        # Remove VTT header
+        cleaned = re.sub(r'^WEBVTT.*?\n', '', cleaned, flags=re.DOTALL)
+        # Collapse blank lines
+        lines = [l.strip() for l in cleaned.split('\n') if l.strip()]
+        # Remove duplicate consecutive lines (common in auto-subs)
+        result = []
+        prev = ''
+        for line in lines:
+            if line != prev:
+                result.append(line)
+                prev = line
+        return '\n'.join(result)
+
 
     async def _fetch_xhs(self, url: str) -> Dict:
         """Fetch Xiaohongshu (小红书) note content.

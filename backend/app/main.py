@@ -1,4 +1,5 @@
 """Trove AI — read-later + AI knowledge base for the Chinese internet"""
+from typing import Optional
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -14,6 +15,114 @@ from .routers import articles, knowledge, learning, system, assistant, auth, use
 
 settings = get_settings()
 logger = logging.getLogger("trove.auto_backfill")
+
+
+async def _transcribe_youtube(url: str) -> Optional[str]:
+    """Extract audio from YouTube via yt-dlp and transcribe with Whisper."""
+    import subprocess, tempfile, os
+    proxy = 'http://host.docker.internal:7897'
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        audio_path = os.path.join(tmpdir, 'audio.mp3')
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                'yt-dlp', '-x', '--audio-format', 'mp3',
+                '--audio-quality', '32K',
+                '--no-playlist', '--no-warnings',
+                '--proxy', proxy,
+                '-o', audio_path, url,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=180)
+            if proc.returncode != 0 or not os.path.exists(audio_path):
+                logger.warning(f"YouTube ASR: yt-dlp audio download failed: {stderr[:200]}")
+                return None
+
+            from app.services.transcription_service import transcription_service
+            from pathlib import Path
+            logger.info(f"YouTube ASR: audio downloaded, starting whisper...")
+            return await transcription_service._transcribe_local(Path(audio_path))
+        except asyncio.TimeoutError:
+            logger.warning(f"YouTube ASR: audio download timeout")
+            return None
+        except Exception as e:
+            logger.error(f"YouTube ASR: failed: {e}")
+            return None
+
+
+async def auto_backfill_asr():
+    """Background task: scan for articles with ASR_PENDING marker and transcribe."""
+    import re
+    from app.database import async_session
+    from sqlalchemy import select
+    from app.models.article import Article
+
+    await asyncio.sleep(30)
+    logger.info("ASR scanner: starting scan loop")
+
+    while True:
+        try:
+            async with async_session() as db:
+                result = await db.execute(
+                    select(Article).where(Article.raw_content.contains('<!-- ASR_PENDING:'))
+                )
+                articles = result.scalars().all()
+
+                if articles:
+                    logger.info(f"ASR scanner: found {len(articles)} pending article(s)")
+
+                for article in articles:
+                    match = re.search(r'<!-- ASR_PENDING:\s*(\S+) -->', article.raw_content or '<!-- ASR_PENDING: -->')
+                    if not match:
+                        continue
+                    audio_url = match.group(1)
+                    marker = match.group(0)
+
+                    # Claim this article by replacing marker with RUNNING to prevent double-processing
+                    article.raw_content = article.raw_content.replace(marker, '<!-- ASR_RUNNING -->')
+                    await db.commit()
+
+                    try:
+                        from app.services.transcription_service import transcription_service
+                        logger.info(f"ASR: transcribing {article.id} ({article.title[:40]}...)")
+                        
+                        # For YouTube URLs, extract audio via yt-dlp first
+                        if 'youtube.com' in audio_url or 'youtu.be' in audio_url:
+                            asr_text = await _transcribe_youtube(audio_url)
+                        else:
+                            asr_text = await transcription_service.transcribe_url(
+                                audio_url, referer='https://www.bilibili.com'
+                            )
+                        if asr_text:
+                            article.raw_content = article.raw_content.replace(
+                                '<!-- ASR_RUNNING -->', f'\n\n## 视频字幕（ASR 转录）\n\n{asr_text}'
+                            ).replace(
+                                '*（后台语音转录中，稍后自动更新…）*', ''
+                            )
+                            article.word_count = len(article.raw_content)
+                            await db.commit()
+                            logger.info(f"ASR: done {article.id} ({len(asr_text)} chars)")
+                        else:
+                            article.raw_content = article.raw_content.replace(
+                                '<!-- ASR_RUNNING -->', ''
+                            ).replace(
+                                '*（后台语音转录中，稍后自动更新…）*',
+                                '*（该视频未提供字幕，ASR 转录亦不可用）*'
+                            )
+                            await db.commit()
+                            logger.warning(f"ASR: empty result for {article.id}, marker removed")
+                    except Exception as e:
+                        # Rollback marker to PENDING so another try can pick it up
+                        article.raw_content = article.raw_content.replace(
+                            '<!-- ASR_RUNNING -->', marker
+                        )
+                        await db.commit()
+                        logger.error(f"ASR: failed for {article.id}, re-queued: {e}")
+        except Exception as e:
+            logger.error(f"ASR scan error: {e}")
+
+        await asyncio.sleep(30)  # Scan every 30 seconds
 logger.setLevel(logging.INFO)
 if not logger.handlers:
     handler = logging.StreamHandler()
@@ -69,9 +178,19 @@ async def lifespan(app: FastAPI):
     # Startup
     await init_db()
 
+    # Preload whisper model at startup (avoid timeout on first ASR request)
+    import concurrent.futures
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    from app.services.transcription_service import preload_whisper
+    asyncio.get_running_loop().run_in_executor(executor, preload_whisper)
+
     # Start auto-backfill background task
     backfill_task = asyncio.create_task(auto_backfill_embeddings())
     logger.info("Auto-backfill background task started (scans every 5 minutes)")
+
+    # Start background ASR transcription task
+    asr_task = asyncio.create_task(auto_backfill_asr())
+    logger.info("ASR background task started (scans every 30 seconds)")
 
     # Start periodic review cron loop
     from app.services.review_service import review_cron_loop
@@ -82,6 +201,7 @@ async def lifespan(app: FastAPI):
     yield
     # Shutdown
     backfill_task.cancel()
+    asr_task.cancel()
     review_task.cancel()
     print(f"👋 Trove AI shutting down")
 
