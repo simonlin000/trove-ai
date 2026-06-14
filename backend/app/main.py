@@ -20,17 +20,28 @@ logger = logging.getLogger("trove.auto_backfill")
 async def _transcribe_youtube(url: str) -> Optional[str]:
     """Extract audio from YouTube via yt-dlp and transcribe with Whisper."""
     import subprocess, tempfile, os
-    proxy = 'http://host.docker.internal:7897'
+
+    # Read proxy from plugins config
+    try:
+        from app.config_manager import get_plugins_config
+        plugins = get_plugins_config()
+        proxy = plugins.get('proxy', '') if plugins else ''
+    except Exception:
+        proxy = ''
 
     with tempfile.TemporaryDirectory() as tmpdir:
         audio_path = os.path.join(tmpdir, 'audio.mp3')
         try:
-            proc = await asyncio.create_subprocess_exec(
+            ytdlp_args = [
                 'yt-dlp', '-x', '--audio-format', 'mp3',
                 '--audio-quality', '32K',
                 '--no-playlist', '--no-warnings',
-                '--proxy', proxy,
-                '-o', audio_path, url,
+            ]
+            if proxy:
+                ytdlp_args += ['--proxy', proxy]
+            ytdlp_args += ['-o', audio_path, url]
+            proc = await asyncio.create_subprocess_exec(
+                *ytdlp_args,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )

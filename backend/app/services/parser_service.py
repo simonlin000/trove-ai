@@ -14,10 +14,39 @@ from markdownify import markdownify as md_convert
 logger = logging.getLogger(__name__)
 
 
+def _get_plugin_bool(key: str, default: bool = True) -> bool:
+    """Read boolean config from plugins settings."""
+    try:
+        from app.config_manager import get_plugins_config
+        cfg = get_plugins_config()
+        val = cfg.get(key, str(default).lower())
+        return val.lower() in ('true', '1', 'yes', 'on')
+    except Exception:
+        return default
+
+
+def _get_plugin_int(key: str, default: int = 1800) -> int:
+    try:
+        from app.config_manager import get_plugins_config
+        cfg = get_plugins_config()
+        return int(cfg.get(key, str(default)))
+    except Exception:
+        return default
+
+
+def _get_plugin_str(key: str, default: str = '') -> str:
+    try:
+        from app.config_manager import get_plugins_config
+        cfg = get_plugins_config()
+        return cfg.get(key, default)
+    except Exception:
+        return default
+
+
 # Match http(s) URL up to whitespace, CJK char, or common Chinese punctuation.
 # Used to extract the actual link from share text (抖音/头条 share blobs etc.).
 _URL_RE = re.compile(
-    r'https?://[^\s一-鿿"\'<>{}|\\^`，。、；：！？【】（）《》""'']+',
+    r'https?://[^\s一-鿿"\'<>{}|\\^`,。、;:!?【】()《》""'']+',
     re.IGNORECASE,
 )
 
@@ -35,7 +64,7 @@ def extract_url_from_text(text: str) -> Optional[str]:
 
 class ParserService:
     """Extract and clean article content from various platforms."""
-    
+
     PLATFORM_DETECT = {
         'weixin.qq.com': 'wechat',
         'mp.weixin.qq.com': 'wechat',
@@ -57,14 +86,14 @@ class ParserService:
         'youtube.com': 'youtube',      # YouTube
         'youtu.be': 'youtube',         # YouTube 短链
     }
-    
+
     def detect_platform(self, url: str) -> str:
         """Detect source platform from URL."""
         for domain, platform in self.PLATFORM_DETECT.items():
             if domain in url:
                 return platform
         return 'other'
-    
+
     def _get_headers(self, platform: str, url: str) -> Dict[str, str]:
         """Get platform-specific HTTP headers to avoid 403 and anti-scraping."""
         base_headers = {
@@ -79,7 +108,7 @@ class ParserService:
             'Cache-Control': 'no-cache',
             'Pragma': 'no-cache',
         }
-        
+
         if platform == 'toutiao':
             base_headers.update({
                 'Referer': 'https://www.toutiao.com/',
@@ -97,9 +126,9 @@ class ParserService:
             base_headers.update({
                 'Referer': 'https://mp.weixin.qq.com/',
             })
-        
+
         return base_headers
-    
+
     def _extract_og_metadata(self, soup: BeautifulSoup) -> Dict:
         """Extract OpenGraph and other meta tag metadata."""
         meta = {}
@@ -108,7 +137,7 @@ class ParserService:
             content = og_tag.get('content', '')
             if not content:
                 continue
-            
+
             if prop == 'og:title':
                 meta['title'] = content
             elif prop == 'og:description' or prop == 'description':
@@ -123,35 +152,35 @@ class ParserService:
             elif prop == 'article:published_time':
                 meta['published_time'] = content
         return meta
-    
+
     async def fetch_content(self, url: str) -> Dict:
         """Fetch and parse article content from URL."""
         url = extract_url_from_text(url) or url
         platform = self.detect_platform(url)
-        
-        # P0: Toutiao — use mobile SSR endpoint (m.toutiao.com) to bypass
+
+        # P0: Toutiao - use mobile SSR endpoint (m.toutiao.com) to bypass
         # byte跳's byted_acrawler JS VM on desktop site
         if platform == 'toutiao':
             return await self._fetch_toutiao(url)
-        
-        # P2: Douyin — use douyin-tiktok-scraper library (X-Bogus + API)
+
+        # P2: Douyin - use douyin-tiktok-scraper library (X-Bogus + API)
         if platform == 'douyin':
             return await self._fetch_douyin(url)
 
-        # P3: Bilibili — split into 专栏 (HTML) vs 视频 (API + 字幕)
+        # P3: Bilibili - split into 专栏 (HTML) vs 视频 (API + 字幕)
         if platform == 'bilibili':
             return await self._fetch_bilibili(url)
 
-        # P4: Xiaohongshu — follow xhslink redirect → curl_cffi mobile UA →
+        # P4: Xiaohongshu - follow xhslink redirect → curl_cffi mobile UA →
         # parse __INITIAL_STATE__ inline JSON → Playwright/OG fallback
         if platform == 'xhs':
             return await self._fetch_xhs(url)
 
-        # P5: YouTube — yt-dlp subtitles first, ASR fallback
+        # P5: YouTube - yt-dlp subtitles first, ASR fallback
         if platform == 'youtube':
             return await self._fetch_youtube(url)
 
-        # P5: 通用网页 — trafilatura 优先,内容过短再 Playwright 渲染,最后 BeautifulSoup 兜底
+        # P5: 通用网页 - trafilatura 优先,内容过短再 Playwright 渲染,最后 BeautifulSoup 兜底
         # 视频号(channels.weixin.qq.com)、CSDN、掘金、Medium、少数派、36氪 等 JS 动态页同走此路
         return await self._fetch_generic(url, platform)
 
@@ -392,7 +421,7 @@ class ParserService:
         return await self._fetch_bilibili_video(url)
 
     async def _fetch_bilibili_article(self, url: str) -> Dict:
-        """Bilibili 专栏 — anti-bot is mild, plain GET works."""
+        """Bilibili 专栏 - anti-bot is mild, plain GET works."""
         headers = self._get_headers('bilibili', url)
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
             resp = await client.get(url, headers=headers)
@@ -436,7 +465,7 @@ class ParserService:
         }
 
     async def _fetch_bilibili_video(self, url: str) -> Dict:
-        """Bilibili 视频 — pull metadata + subtitle via official API."""
+        """Bilibili 视频 - pull metadata + subtitle via official API."""
         # b23.tv 短链 → 跳转拿到含 bvid 的真实 URL
         if 'b23.tv' in url:
             async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
@@ -459,7 +488,7 @@ class ParserService:
         cid = info.get('cid')
         duration = info.get('duration', 0)  # seconds
 
-        # Subtitle (best effort — many videos have none)
+        # Subtitle (best effort - many videos have none)
         subtitle_text = ''
         try:
             sub_info = await v.get_subtitle(cid=cid) if cid else None
@@ -482,7 +511,7 @@ class ParserService:
 
         # ASR: if no subtitle, embed hidden marker for background transcription
         asr_marker = ''
-        if not subtitle_text and cid:
+        if not subtitle_text and cid and _get_plugin_bool('enable_asr', True):
             try:
                 play_url = f'https://api.bilibili.com/x/player/playurl?bvid={bvid}&cid={cid}&qn=0&fnval=16'
                 async with httpx.AsyncClient(timeout=10.0) as client:
@@ -492,20 +521,20 @@ class ParserService:
                     if audio_streams:
                         audio_streams.sort(key=lambda a: a.get('bandwidth', 999999))
                         asr_url = audio_streams[0].get('base_url', '')
-                        if asr_url and duration <= 1800:  # ≤30 minutes
+                        if asr_url and duration <= _get_plugin_int('asr_max_duration', 1800):
                             asr_marker = f'\n<!-- ASR_PENDING: {asr_url} -->'
             except Exception as e:
                 logger.warning(f"bilibili ASR prep failed for {bvid}: {e}")
 
-        raw_md = f"# {title}\n\n**UP 主：** {owner}\n\n## 简介\n\n{desc}"
+        raw_md = f"# {title}\n\n**UP 主:** {owner}\n\n## 简介\n\n{desc}"
         if subtitle_text:
             raw_md += f"\n\n## 视频字幕\n\n{subtitle_text}"
         elif asr_marker:
-            raw_md += f"\n\n*（后台语音转录中，稍后自动更新…）*{asr_marker}"
-        elif duration > 1800:
-            raw_md += f"\n\n*（视频 {duration // 60} 分钟，超出自动转录上限，可手动下载音频转录。）*"
+            raw_md += f"\n\n*(后台语音转录中,稍后自动更新...)*{asr_marker}"
+        elif duration > _get_plugin_int('asr_max_duration', 1800):
+            raw_md += f"\n\n*(视频 {duration // 60} 分钟,超出自动转录上限,可手动下载音频转录。)*"
         else:
-            raw_md += "\n\n*（该视频未提供字幕，ASR 转录亦不可用）*"
+            raw_md += "\n\n*(该视频未提供字幕,ASR 转录亦不可用)*"
 
         return {
             'title': title or f'B 站视频 {bvid}',
@@ -518,10 +547,10 @@ class ParserService:
 
     async def _fetch_toutiao(self, url: str) -> Dict:
         """Fetch Toutiao article via mobile SSR endpoint (m.toutiao.com).
-        
+
         Desktop www.toutiao.com returns a JS VM challenge (byted_acrawler) that
         appears as garbled text. The mobile site m.toutiao.com uses pure SSR with
-        all article data in a <script id="RENDER_DATA"> JSON block — no anti-crawling.
+        all article data in a <script id="RENDER_DATA"> JSON block - no anti-crawling.
         """
         # Convert desktop URL to mobile equivalent
         mobile_url = re.sub(
@@ -531,7 +560,7 @@ class ParserService:
         )
         # If it's a short link, follow redirects to get the real URL
         # e.g., toutiao.com/article/xxx → same on mobile
-        
+
         mobile_headers = {
             'User-Agent': (
                 'Mozilla/5.0 (Linux; Android 13; Pixel 7) '
@@ -541,12 +570,12 @@ class ParserService:
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
             'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
         }
-        
+
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
             resp = await client.get(mobile_url, headers=mobile_headers)
             resp.raise_for_status()
             html = resp.text
-        
+
         # Extract the RENDER_DATA JSON block
         # Format: <script id="RENDER_DATA" type="application/json">URL_ENCODED_JSON</script>
         match = re.search(
@@ -554,25 +583,25 @@ class ParserService:
             html,
             re.DOTALL
         )
-        
+
         if not match:
             raise ValueError(
                 f"Could not find RENDER_DATA block in Toutiao page. "
                 f"Page length: {len(html)} chars. "
                 f"First 200 chars: {html[:200]}"
             )
-        
+
         raw_json = match.group(1).strip()
         if not raw_json:
             raise ValueError("RENDER_DATA block is empty")
-        
+
         try:
             data = json.loads(unquote(raw_json))
         except json.JSONDecodeError:
             # Sometimes the JSON is not URL-encoded
             data = json.loads(raw_json)
-        
-        # Navigate to article data — structure varies slightly
+
+        # Navigate to article data - structure varies slightly
         article = None
         for path in [
             lambda d: d.get("articleInfo"),
@@ -585,14 +614,14 @@ class ParserService:
                     break
             except Exception:
                 continue
-        
+
         if not article or not isinstance(article, dict):
             raise ValueError(
                 f"Could not extract article from RENDER_DATA. "
                 f"Top-level keys: {list(data.keys())[:10]}"
             )
-        
-        # Extract fields — most string values are URL-encoded
+
+        # Extract fields - most string values are URL-encoded
         def safe_unquote(v):
             """Unquote a value, handling None and non-string types."""
             if v is None:
@@ -607,10 +636,10 @@ class ParserService:
                 except Exception:
                     pass
             return result
-        
+
         title = safe_unquote(article.get("title", ""))
         content_html = safe_unquote(article.get("content", ""))
-        
+
         if not content_html:
             # Some articles are video-only or short-form
             detail = article.get("detailSource") or article.get("abstract") or ""
@@ -618,25 +647,25 @@ class ParserService:
                 content_html = f"<p>{safe_unquote(detail)}</p>"
             else:
                 raise ValueError("Toutiao article has no text content (may be video-only)")
-        
+
         # Author info
         media_user = article.get("mediaUser") or article.get("userInfo") or {}
         author_name = safe_unquote(media_user.get("screenName") or media_user.get("name") or "")
-        
+
         # Cover image
         cover = ""
         if media_user.get("avatarUrl"):
             cover = safe_unquote(media_user.get("avatarUrl", ""))
         if article.get("coverImage") or article.get("cover"):
             cover = article.get("coverImage") or article.get("cover") or cover
-        
+
         # Publish time (Unix timestamp in seconds)
         publish_time = article.get("publishTime") or article.get("createTime") or 0
-        
+
         # Engagement stats for metadata
         comment_count = article.get("commentCount", 0)
         digg_count = article.get("diggCount", 0)
-        
+
         # Build OG metadata for downstream consumers
         og_meta = {
             'title': title,
@@ -646,13 +675,13 @@ class ParserService:
             'published_time': str(publish_time),
             'site_name': '今日头条',
         }
-        
+
         logger.info(
             f"Toutiao parse success: title='{title[:50]}', "
             f"content_len={len(content_html)}, author='{author_name}', "
             f"comments={comment_count}, likes={digg_count}"
         )
-        
+
         return {
             'title': title,
             'raw_html': html,
@@ -662,16 +691,16 @@ class ParserService:
             'cover_image': cover or None,
             'og_meta': og_meta,
         }
-    
+
     async def _fetch_douyin(self, url: str) -> Dict:
-        """Fetch Douyin content using Playwright — intercepts the internal API.
-        
+        """Fetch Douyin content using Playwright - intercepts the internal API.
+
         Douyin is a React SPA. Instead of trying to generate X-Bogus signatures
         to call the API directly, we let Playwright load the page and intercept
         the /aweme/v1/web/aweme/detail/ XHR response that the SPA itself makes.
-        This gives us the full structured JSON from Douyin's own API — no
+        This gives us the full structured JSON from Douyin's own API - no
         signature cracking required.
-        
+
         Supports:
         - Share links: https://v.douyin.com/xxxxx/
         - Video pages: https://www.douyin.com/video/xxxxx
@@ -679,25 +708,25 @@ class ParserService:
         """
         import asyncio
         import os
-        
+
         try:
             from playwright.async_api import async_playwright
         except ImportError:
             raise ValueError(
                 "playwright not installed. Add 'playwright>=1.40.0' to requirements.txt"
             )
-        
+
         logger.info(f"Fetching Douyin via Playwright: {url}")
-        
+
         # Capture the API response via request interception
         api_response = None
-        
+
         async def on_response(response):
             nonlocal api_response
             if api_response is not None:
                 return
             # Intercept the aweme detail API call.
-            # Multiple endpoints — video shares hit /aweme/v1/web/aweme/detail/,
+            # Multiple endpoints - video shares hit /aweme/v1/web/aweme/detail/,
             # image-note shares (/share/note/...) hit different paths.
             req_url = response.request.url
             api_patterns = (
@@ -717,7 +746,7 @@ class ParserService:
                             logger.info(f"Douyin API intercepted: {len(str(body))} bytes")
                     except Exception:
                         pass
-        
+
         async with async_playwright() as p:
             browser = await p.chromium.launch(
                 headless=True,
@@ -728,7 +757,7 @@ class ParserService:
                     '--disable-setuid-sandbox',
                 ]
             )
-            
+
             context = await browser.new_context(
                 user_agent=(
                     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
@@ -738,34 +767,34 @@ class ParserService:
                 viewport={'width': 1920, 'height': 1080},
                 locale='zh-CN',
             )
-            
+
             page = await context.new_page()
-            
+
             # Register response handler BEFORE navigation
             page.on('response', on_response)
-            
+
             # Navigate to the douyin page
             try:
                 await page.goto(url, wait_until='domcontentloaded', timeout=30000)
             except Exception as e:
                 logger.warning(f"Page navigation error (may be ok): {e}")
-            
+
             # Wait for the API response (polling)
             import time as time_mod
             wait_start = time_mod.time()
             while api_response is None and (time_mod.time() - wait_start) < 15:
                 await asyncio.sleep(0.5)
-            
+
             if api_response is None:
                 logger.warning(
                     "Timeout waiting for Douyin API response. "
                     "Falling back to DOM extraction."
                 )
-            
+
             # If API interception failed, try the SSR data in the DOM
             if api_response is None:
                 try:
-                    # state='attached' — RENDER_DATA is a <script> tag, never "visible"
+                    # state='attached' - RENDER_DATA is a <script> tag, never "visible"
                     await page.wait_for_selector(
                         '#RENDER_DATA, [data-e2e="feed-active-video"], .video-info-detail',
                         state='attached',
@@ -847,7 +876,7 @@ class ParserService:
                 except Exception:
                     og_meta_capture = {}
 
-                # Third try: SSR JSON in a <script id="RENDER_DATA"> — already attempted
+                # Third try: SSR JSON in a <script id="RENDER_DATA"> - already attempted
                 # above, but for image-note pages it can also be inside an inline
                 # script literal. As a last resort, scan the rendered HTML for any
                 # plausible "aweme_detail" / "noteDetail" JSON blob.
@@ -882,7 +911,7 @@ class ParserService:
 
                 # Fourth try (last resort): OG meta fallback. For note pages where
                 # all structured extraction fails, OG meta tags still contain
-                # title / description / image — better than failing.
+                # title / description / image - better than failing.
                 if api_response is None and og_meta_capture and (
                     og_meta_capture.get('description') or og_meta_capture.get('title')
                 ):
@@ -891,15 +920,15 @@ class ParserService:
                         f"Douyin extracted via OG meta fallback (note-style page). "
                         f"title head: {(og_meta_capture.get('title') or '')[:40]}"
                     )
-            
+
             await browser.close()
-        
+
         if api_response is None:
             raise ValueError(
                 "Could not extract Douyin video data. "
                 "The page may be blocked or the link may be invalid."
             )
-        
+
         # ── Parse the API response ──
         # Sources we may have: aweme_detail (API), routerData (window._ROUTER_DATA),
         # fromHtmlBlob (HTML scan). Walk them to find the aweme detail dict.
@@ -909,7 +938,7 @@ class ParserService:
         elif 'routerData' in api_response:
             router = api_response['routerData']
             loader = (router.get('loaderData') or {}) if isinstance(router, dict) else {}
-            # Walk every loaderData entry — covers video_(id)_0, note_(id)_0, and
+            # Walk every loaderData entry - covers video_(id)_0, note_(id)_0, and
             # any future variants without hardcoding the prefix.
             for v in loader.values():
                 if not isinstance(v, dict):
@@ -941,7 +970,7 @@ class ParserService:
         elif 'fromOgMeta' in api_response:
             # OG meta is the last-resort path for SSR-only note pages.
             # The description format is, empirically:
-            #   "<note content> - <author>于YYYYMMDD发布在抖音，已经收获了N个喜欢，..."
+            #   "<note content> - <author>于YYYYMMDD发布在抖音,已经收获了N个喜欢,..."
             og = api_response['fromOgMeta']
             resolved = api_response.get('resolvedUrl', '')
             desc_full = og.get('description') or og.get('title') or ''
@@ -970,52 +999,52 @@ class ParserService:
                 'cover': {'url_list': [og['image']]} if og.get('image') else {},
                 'images': [{'url_list': [og['image']]}] if (is_note and og.get('image')) else [],
             }
-        
+
         if aweme is None:
             raise ValueError(
                 f"Could not find aweme data in API response. "
                 f"Keys: {list(api_response.keys())[:10]}"
             )
-        
+
         # ── Extract data from aweme object ──
         aweme_id = aweme.get('aweme_id', '')
         desc = aweme.get('desc', '')
         create_time = aweme.get('create_time', 0)
         aweme_type = aweme.get('aweme_type', 0)  # 0=video, 68=image/note
-        
+
         # Author
         author_data = aweme.get('author', {})
         author_name = author_data.get('nickname', '')
         author_unique_id = author_data.get('unique_id', '')
-        
+
         # Statistics
         stats = aweme.get('statistics', {})
         digg_count = stats.get('digg_count', 0) or stats.get('admire_count', 0)
         comment_count = stats.get('comment_count', 0)
         share_count = stats.get('share_count', 0)
-        
+
         # Cover
         cover_data = aweme.get('video', {}).get('cover', {}) or aweme.get('cover', {})
         cover_url_list = cover_data.get('url_list', [])
         cover_url = cover_url_list[0] if cover_url_list else ''
-        
+
         # Hashtags
         hashtags = []
         for tag in (aweme.get('text_extra', []) or []):
             if isinstance(tag, dict) and tag.get('hashtag_name'):
                 hashtags.append(tag['hashtag_name'])
-        
+
         # Music
         music_data = aweme.get('music', {})
         music_title = music_data.get('title', '')
         music_author = music_data.get('author', '')
-        
+
         # ── Build content HTML ──
         content_parts = []
-        
+
         if desc:
             content_parts.append(f"<p>{desc}</p>")
-        
+
         if aweme_type == 68:
             # Image note / 图文
             images = aweme.get('images', [])
@@ -1057,7 +1086,7 @@ class ParserService:
 
             type_label = 'video'
 
-            # Whisper transcription. Best effort — works reliably from the agent
+            # Whisper transcription. Best effort - works reliably from the agent
             # (home IP), and silently no-ops on prod where the douyinpic CDN
             # blocks server-side download.
             transcribe_src = (dl_url_list[0] if dl_url_list else nwm_url) or ''
@@ -1072,14 +1101,14 @@ class ParserService:
                         content_parts.append(
                             '<div class="douyin-transcript" style="margin-top:16px;'
                             'padding:12px;background:#f6f6f6;border-radius:8px;">'
-                            '<div style="font-size:12px;color:#888;margin-bottom:6px;">📝 视频字幕（AI 转写）</div>'
+                            '<div style="font-size:12px;color:#888;margin-bottom:6px;">📝 视频字幕(AI 转写)</div>'
                             f'<p style="white-space:pre-wrap;">{transcript}</p>'
                             '</div>'
                         )
                         logger.info(f"Douyin transcript appended ({len(transcript)} chars)")
                 except Exception as e:
                     logger.warning(f"Douyin transcription failed (non-fatal): {e}")
-        
+
         # Music metadata
         if music_title:
             content_parts.append(
@@ -1087,9 +1116,9 @@ class ParserService:
                 f'🎵 {music_title}'
             )
             if music_author:
-                content_parts.append(f' — {music_author}')
+                content_parts.append(f' - {music_author}')
             content_parts.append('</div>')
-        
+
         # Statistics
         content_parts.append(
             f'<div class="douyin-stats" style="color:#999;font-size:12px;">'
@@ -1100,9 +1129,9 @@ class ParserService:
                 f' · {" ".join("#"+t for t in hashtags)}'
             )
         content_parts.append('</div>')
-        
+
         content_html = '\n'.join(content_parts)
-        
+
         # OG metadata
         og_meta = {
             'title': desc[:100] if desc else f'抖音{type_label}_{aweme_id}',
@@ -1112,15 +1141,15 @@ class ParserService:
             'published_time': str(create_time),
             'site_name': '抖音',
         }
-        
+
         author_display = author_name or author_unique_id or 'unknown'
-        
+
         logger.info(
             f"Douyin parse SUCCESS: type={type_label}, id={aweme_id}, "
             f"desc='{desc[:50]}', author='{author_display}', "
             f"likes={digg_count}, comments={comment_count}"
         )
-        
+
         # Rewrite hotlink-protected CDN URLs (douyinpic / douyinvod) through proxy
         content_html = self._proxy_imgs_in_html(content_html)
         cover_url_final = self._proxy_url(cover_url) if cover_url else None
@@ -1140,13 +1169,21 @@ class ParserService:
         import json as _json
         import subprocess
 
-        proxy = 'http://host.docker.internal:7897'  # YouTube requires proxy from Docker
+        # Only parse YouTube if yt-dlp is enabled
+        if not _get_plugin_bool('enable_yt_dlp', True):
+            return self._youtube_fallback('YouTube Video',
+                '(YouTube 解析未开启,可在 系统管理 → 插件设置 中开启)', url)
+
+        proxy = _get_plugin_str('proxy', '')
 
         # Get video metadata + subtitle list as JSON
         try:
+            ytdlp_args = ['yt-dlp', '-j', '--no-playlist', '--skip-download', '--no-warnings']
+            if proxy:
+                ytdlp_args += ['--proxy', proxy]
+            ytdlp_args += [url]
             proc = await asyncio.create_subprocess_exec(
-                'yt-dlp', '-j', '--no-playlist', '--skip-download',
-                '--no-warnings', '--proxy', proxy, url,
+                *ytdlp_args,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -1206,9 +1243,10 @@ class ParserService:
                         'yt-dlp', '--skip-download', '--no-playlist', '--no-warnings',
                         '--write-auto-subs', '--sub-lang', 'zh-Hans,en,zh',
                         '--sub-format', 'srt/vtt/ass',
-                        '--proxy', proxy,
-                        '-o', f'{tmpdir}/%(title)s.%(ext)s', url
                     ]
+                    if proxy:
+                        cmd += ['--proxy', proxy]
+                    cmd += ['-o', f'{tmpdir}/%(title)s.%(ext)s', url]
                     proc = await asyncio.create_subprocess_exec(
                         *cmd,
                         stdout=asyncio.subprocess.PIPE,
@@ -1228,23 +1266,25 @@ class ParserService:
                         chosen = (zh_files or sub_files)[0]
                         with open(chosen, 'r', encoding='utf-8', errors='ignore') as f:
                             raw_sub = f.read()
-                        # Strip SRT timestamps/numbers — keep just text
+                        # Strip SRT timestamps/numbers - keep just text
                         subtitle_text = self._clean_srt(raw_sub)
                         logger.info(f"YouTube: subtitle from {chosen.name} ({len(subtitle_text)} chars)")
             except Exception as e:
                 logger.warning(f"YouTube subtitle download failed: {e}")
 
-        raw_md = f"# {title}\n\n**频道：** {uploader}\n\n## 简介\n\n{desc}"
+        raw_md = f"# {title}\n\n**频道:** {uploader}\n\n## 简介\n\n{desc}"
         if subtitle_text:
             raw_md += f"\n\n## 视频字幕\n\n{subtitle_text}"
 
         # ASR fallback (same pattern as Bilibili)
         asr_marker = ''
-        if not subtitle_text and duration <= 1800:
-            asr_marker = f'\n<!-- ASR_PENDING: {url} -->'  # URL-based: ASR task will use yt-dlp
-            raw_md += f"\n\n*（后台语音转录中，稍后自动更新…）*{asr_marker}"
-        elif not subtitle_text and duration > 1800:
-            raw_md += f"\n\n*（视频 {duration // 60} 分钟，超出自动转录上限。）*"
+        if _get_plugin_bool('enable_asr', True):
+            asr_max = _get_plugin_int('asr_max_duration', 1800)
+            if not subtitle_text and duration <= asr_max:
+                asr_marker = f'\n<!-- ASR_PENDING: {url} -->'  # URL-based: ASR task will use yt-dlp
+                raw_md += f"\n\n*（后台语音转录中，稍后自动更新…）*{asr_marker}"
+            elif not subtitle_text and duration > asr_max:
+                raw_md += f"\n\n*（视频 {duration // 60} 分钟，超出自动转录上限。）*"
 
         return {
             'title': title,
@@ -1259,7 +1299,7 @@ class ParserService:
         return {
             'title': title,
             'raw_html': '',
-            'raw_content': f"# {title}\n\n{desc}\n\n*（无法获取视频详情）*",
+            'raw_content': f"# {title}\n\n{desc}\n\n*(无法获取视频详情)*",
             'platform': 'youtube',
             'author': '',
             'cover_image': '',
@@ -1305,7 +1345,7 @@ class ParserService:
         logger.info(f"Fetching XHS: {url}")
 
         # XHS sec_server redirects iPhone-mobile UAs to /404/sec_xxx (anti-scraping).
-        # Desktop Chrome Mac UA passes — the page resolves to /explore/<id> with
+        # Desktop Chrome Mac UA passes - the page resolves to /explore/<id> with
         # full noteDetailMap in __INITIAL_STATE__.
         desktop_ua = (
             'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
@@ -1331,7 +1371,7 @@ class ParserService:
             )
             html = resp.text or ""
             final_url = str(resp.url) if hasattr(resp, 'url') else url
-            # If we got bounced to the sec page, drop the body — Playwright will
+            # If we got bounced to the sec page, drop the body - Playwright will
             # have a better shot.
             if '/404/sec_' in final_url or 'xhs_sec_server' in final_url:
                 logger.info(f"XHS curl_cffi got sec page, trying Playwright. final={final_url[:120]}")
@@ -1436,7 +1476,7 @@ class ParserService:
                     parts.append(
                         '<div class="xhs-transcript" style="margin-top:16px;'
                         'padding:12px;background:#f6f6f6;border-radius:8px;">'
-                        '<div style="font-size:12px;color:#888;margin-bottom:6px;">📝 视频字幕（AI 转写）</div>'
+                        '<div style="font-size:12px;color:#888;margin-bottom:6px;">📝 视频字幕(AI 转写)</div>'
                         f'<p style="white-space:pre-wrap;">{transcript}</p>'
                         '</div>'
                     )
@@ -1471,7 +1511,7 @@ class ParserService:
         """Convert cleaned HTML to readable markdown."""
         if not html_content:
             return ""
-        
+
         # For WeChat, rewrite mmbiz.qpic.cn image URLs to proxy endpoint
         # instead of deleting them, so images display correctly in the browser
         if platform == 'wechat':
@@ -1484,22 +1524,22 @@ class ParserService:
                 elif not img.get('src'):
                     img.decompose()
             html_content = str(soup)
-        
+
         # markdownify: when using convert, don't set strip
         markdown = md_convert(
             html_content,
             heading_style='ATX',
             bullets='-',
         )
-        
+
         # Clean up excessive whitespace
         markdown = re.sub(r'\n{4,}', '\n\n\n', markdown)
         markdown = markdown.strip()
-        
+
         # If markdown is empty/very short, try extracting text directly
         if len(markdown) < 100:
             soup = BeautifulSoup(html_content, 'lxml')
-            
+
             # Extract all text, preserving paragraph structure
             paragraphs = []
             for tag in soup.find_all(['p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'blockquote']):
@@ -1522,7 +1562,7 @@ class ParserService:
                             paragraphs.append(f"- {text}")
                         else:
                             paragraphs.append(text)
-            
+
             if paragraphs:
                 markdown = '\n\n'.join(paragraphs)
             else:
@@ -1530,15 +1570,15 @@ class ParserService:
                 text = soup.get_text(separator='\n', strip=True)
                 lines = [l.strip() for l in text.split('\n') if l.strip()]
                 markdown = '\n\n'.join(lines)
-        
+
         return markdown
-    
+
     def count_words(self, text: str) -> int:
         """Count words/characters in text."""
         chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', text))
         english_words = len(re.findall(r'[a-zA-Z]+', text))
         return chinese_chars + english_words
-    
+
     def estimate_reading_time(self, word_count: int) -> int:
         """Estimate reading time in minutes."""
         return max(1, round(word_count / 300))

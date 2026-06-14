@@ -176,16 +176,19 @@ export default function SettingsPage() {
   const groupIcons: Record<string, React.ReactNode> = {
     llm: <Zap className="w-5 h-5 text-amber-500" />,
     embedding: <Cpu className="w-5 h-5 text-blue-500" />,
+    plugins: <Download className="w-5 h-5 text-green-500" />,
   };
 
   const groupLabels: Record<string, string> = {
     llm: 'AI 对话模型',
     embedding: '嵌入模型',
+    plugins: '插件设置',
   };
 
   const groupDescs: Record<string, string> = {
     llm: '用于文章摘要、灵感创作、标签生成等 AI 功能',
     embedding: '用于语义搜索和知识图谱的向量化',
+    plugins: '视频解析和语音转录',
   };
 
   return (

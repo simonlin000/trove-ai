@@ -124,6 +124,52 @@ CONFIG_SCHEMA: Dict[str, dict] = {
         ],
         "test_provider": "embedding",
     },
+    "plugins": {
+        "label": "插件设置",
+        "description": "视频解析和语音转录的相关配置",
+        "icon": "plug",
+        "fields": [
+            {
+                "key": "enable_yt_dlp",
+                "label": "YouTube 解析",
+                "type": "select",
+                "options": [
+                    {"value": "true", "label": "开启"},
+                    {"value": "false", "label": "关闭"},
+                ],
+                "default": "true",
+                "required": False,
+            },
+            {
+                "key": "proxy",
+                "label": "代理地址",
+                "type": "text",
+                "default": "",
+                "placeholder": "http://host.docker.internal:7897",
+                "required": False,
+            },
+            {
+                "key": "enable_asr",
+                "label": "语音转录 (ASR)",
+                "type": "select",
+                "options": [
+                    {"value": "true", "label": "开启"},
+                    {"value": "false", "label": "关闭"},
+                ],
+                "default": "true",
+                "required": False,
+            },
+            {
+                "key": "asr_max_duration",
+                "label": "转录上限（秒）",
+                "type": "text",
+                "default": "1800",
+                "placeholder": "1800（30 分钟）",
+                "required": False,
+            },
+        ],
+        "test_provider": None,
+    },
 }
 
 
@@ -229,6 +275,11 @@ def get_llm_config() -> Dict[str, str]:
 def get_embedding_config() -> Dict[str, str]:
     """Get effective embedding config."""
     return get_effective_config("embedding")
+
+
+def get_plugins_config() -> Dict[str, str]:
+    """Get effective plugins config."""
+    return get_effective_config("plugins")
 
 
 def get_all_schemas() -> Dict[str, dict]:
